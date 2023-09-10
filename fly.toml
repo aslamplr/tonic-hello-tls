@@ -1,0 +1,20 @@
+# fly.toml app configuration file generated for wandering-frost-4287 on 2023-09-10T18:26:42+05:30
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = "wandering-frost-4287"
+primary_region = "sin"
+
+[build]
+
+[[services]]
+  internal_port = 50051
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["tls"]
+    port = "443"
+
+  [services.ports.tls_options]
+    alpn = ["h2"]

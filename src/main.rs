@@ -1,10 +1,10 @@
-use tonic::{
-    transport::{
-        server::{TcpConnectInfo, TlsConnectInfo},
-        Identity, Server, ServerTlsConfig,
-    },
-    Request, Response, Status,
+#[cfg(feature = "tls")]
+use tonic::transport::{
+    server::{TcpConnectInfo, TlsConnectInfo},
+    Identity, ServerTlsConfig,
 };
+
+use tonic::{transport::Server, Request, Response, Status};
 
 use hello_world::greeter_server::{Greeter, GreeterServer};
 use hello_world::{HelloReply, HelloRequest};
@@ -25,18 +25,31 @@ impl Greeter for MyGreeter {
         &self,
         request: Request<HelloRequest>,
     ) -> Result<Response<HelloReply>, Status> {
-        let conn_info = request
-            .extensions()
-            .get::<TlsConnectInfo<TcpConnectInfo>>()
-            .unwrap();
-        println!(
-            "Got a request from '{}' with info {:?}",
-            request
-                .remote_addr()
-                .map(|c| c.to_string())
-                .unwrap_or_default(),
-            conn_info
-        );
+        #[cfg(feature = "tls")]
+        {
+            let conn_info = request
+                .extensions()
+                .get::<TlsConnectInfo<TcpConnectInfo>>()
+                .unwrap();
+            println!(
+                "Got a request from '{}' with info {:?}",
+                request
+                    .remote_addr()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
+                conn_info
+            );
+        }
+        #[cfg(not(feature = "tls"))]
+        {
+            println!(
+                "Got a request from '{}'",
+                request
+                    .remote_addr()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
+            );
+        }
 
         let reply = hello_world::HelloReply {
             message: format!("Hello {}!", request.into_inner().name),
@@ -47,11 +60,14 @@ impl Greeter for MyGreeter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tls_dir = std::path::PathBuf::from("tls");
-    let cert = std::fs::read_to_string(tls_dir.join("server.pem"))?;
-    let key = std::fs::read_to_string(tls_dir.join("server.key"))?;
+    #[cfg(feature = "tls")]
+    let identity = {
+        let tls_dir = std::path::PathBuf::from("tls");
+        let cert = std::fs::read_to_string(tls_dir.join("server.pem"))?;
+        let key = std::fs::read_to_string(tls_dir.join("server.key"))?;
 
-    let identity = Identity::from_pem(cert, key);
+        Identity::from_pem(cert, key)
+    };
 
     let addr = "[::0]:50051".parse().unwrap();
     let greeter = MyGreeter::default();
@@ -63,8 +79,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("GreeterServer listening on {}", addr);
 
+    #[cfg(feature = "tls")]
     Server::builder()
         .tls_config(ServerTlsConfig::new().identity(identity))?
+        .add_service(reflection_service)
+        .add_service(GreeterServer::new(greeter))
+        .serve(addr)
+        .await?;
+
+    #[cfg(not(feature = "tls"))]
+    Server::builder()
         .add_service(reflection_service)
         .add_service(GreeterServer::new(greeter))
         .serve(addr)
