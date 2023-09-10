@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let identity = Identity::from_pem(cert, key);
 
-    let addr = "[::1]:50051".parse().unwrap();
+    let addr = "[::0]:50051".parse().unwrap();
     let greeter = MyGreeter::default();
 
     let reflection_service = tonic_reflection::server::Builder::configure()
