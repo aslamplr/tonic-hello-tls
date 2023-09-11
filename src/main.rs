@@ -1,3 +1,5 @@
+use cfg_if::cfg_if;
+
 #[cfg(feature = "tls")]
 use tonic::transport::{
     server::{TcpConnectInfo, TlsConnectInfo},
@@ -25,30 +27,29 @@ impl Greeter for MyGreeter {
         &self,
         request: Request<HelloRequest>,
     ) -> Result<Response<HelloReply>, Status> {
-        #[cfg(feature = "tls")]
-        {
-            let conn_info = request
-                .extensions()
-                .get::<TlsConnectInfo<TcpConnectInfo>>()
-                .unwrap();
-            println!(
-                "Got a request from '{}' with info {:?}",
-                request
-                    .remote_addr()
-                    .map(|c| c.to_string())
-                    .unwrap_or_default(),
-                conn_info
-            );
-        }
-        #[cfg(not(feature = "tls"))]
-        {
-            println!(
-                "Got a request from '{}'",
-                request
-                    .remote_addr()
-                    .map(|c| c.to_string())
-                    .unwrap_or_default(),
-            );
+        cfg_if! {
+            if #[cfg(feature = "tls")] {
+                let conn_info = request
+                    .extensions()
+                    .get::<TlsConnectInfo<TcpConnectInfo>>()
+                    .unwrap();
+                println!(
+                    "Got a request from '{}' with info {:?}",
+                    request
+                        .remote_addr()
+                        .map(|c| c.to_string())
+                        .unwrap_or_default(),
+                    conn_info
+                );
+            } else {
+                println!(
+                    "Got a request from '{}'",
+                    request
+                        .remote_addr()
+                        .map(|c| c.to_string())
+                        .unwrap_or_default(),
+                );
+            }
         }
 
         let reply = hello_world::HelloReply {
@@ -79,16 +80,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("GreeterServer listening on {}", addr);
 
-    #[cfg(feature = "tls")]
-    Server::builder()
-        .tls_config(ServerTlsConfig::new().identity(identity))?
-        .add_service(reflection_service)
-        .add_service(GreeterServer::new(greeter))
-        .serve(addr)
-        .await?;
+    let mut server_builder = Server::builder();
 
-    #[cfg(not(feature = "tls"))]
-    Server::builder()
+    cfg_if! {
+        if #[cfg(feature = "tls")] {
+            server_builder = server_builder.tls_config(ServerTlsConfig::new().identity(identity))?;
+        }
+    }
+
+    server_builder
         .add_service(reflection_service)
         .add_service(GreeterServer::new(greeter))
         .serve(addr)
