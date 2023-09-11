@@ -16,6 +16,8 @@ tokio = { version = "1.32.0", features = ["rt-multi-thread", "macros"] }
 tonic = { version = "0.10.0" }
 tonic-reflection = "0.10.0"
 cfg-if = "1.0.0"
+tokio-stream = "0.1.14"
+h2 = "0.3"
 
 [build-dependencies]
 tonic-build = "0.10.0"

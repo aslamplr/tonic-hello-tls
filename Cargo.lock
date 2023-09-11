@@ -1026,8 +1026,10 @@ name = "tonic-hello-tls"
 version = "0.1.0"
 dependencies = [
  "cfg-if",
+ "h2",
  "prost",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-build",
  "tonic-reflection",
