@@ -12,6 +12,11 @@ primary_region = "sin"
   internal_port = 50051
   protocol = "tcp"
 
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 200
+
   [[services.ports]]
     handlers = ["tls"]
     port = "443"
