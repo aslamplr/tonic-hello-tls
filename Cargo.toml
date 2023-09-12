@@ -18,6 +18,11 @@ tonic-reflection = "0.10.0"
 cfg-if = "1.0.0"
 tokio-stream = "0.1.14"
 h2 = "0.3"
+diesel = "2.1.0"
+diesel-async = { version = "0.3.1", features = ["postgres", "bb8"] }
+thiserror = "1.0.48"
+dotenvy = "0.15.7"
+bb8 = "0.8.1"
 
 [build-dependencies]
 tonic-build = "0.10.0"

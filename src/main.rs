@@ -11,7 +11,7 @@ use tonic::transport::{
 use tonic::{transport::Server, Request, Response, Status, Streaming};
 
 use hello_world::greeter_server::{Greeter, GreeterServer};
-use hello_world::{HelloReply, HelloRequest};
+use hello_world::{HelloReply, HelloRequest, ListMessagesReply, ListMessagesRequest};
 
 pub mod hello_world {
     tonic::include_proto!("helloworld");
@@ -19,6 +19,8 @@ pub mod hello_world {
     pub(crate) const FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("helloworld_descriptor");
 }
+
+use tonic_hello_tls::db;
 
 type GreeterResult<T> = Result<Response<T>, Status>;
 type GreeterResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
@@ -46,8 +48,15 @@ fn match_for_io_error(err_status: &Status) -> Option<&std::io::Error> {
     }
 }
 
-#[derive(Default)]
-pub struct MyGreeter {}
+pub struct MyGreeter {
+    db: db::Db,
+}
+
+impl MyGreeter {
+    pub fn new(db: db::Db) -> Self {
+        Self { db }
+    }
+}
 
 #[tonic::async_trait]
 impl Greeter for MyGreeter {
@@ -80,6 +89,10 @@ impl Greeter for MyGreeter {
         let reply = hello_world::HelloReply {
             message: format!("Hello {}!", request.into_inner().name),
         };
+        self.db
+            .insert_message(&reply.message)
+            .await
+            .map_err(|err| Status::new(tonic::Code::Unknown, err.to_string()))?;
         Ok(Response::new(reply))
     }
 
@@ -160,10 +173,53 @@ impl Greeter for MyGreeter {
             Box::pin(out_stream) as Self::SayHelloStreamStream
         ))
     }
+
+    async fn list_messages(
+        &self,
+        request: Request<ListMessagesRequest>,
+    ) -> GreeterResult<ListMessagesReply> {
+        cfg_if! {
+            if #[cfg(feature = "tls")] {
+                let conn_info = request
+                    .extensions()
+                    .get::<TlsConnectInfo<TcpConnectInfo>>()
+                    .unwrap();
+                println!(
+                    "Got a request from '{}' with info {:?}",
+                    request
+                        .remote_addr()
+                        .map(|c| c.to_string())
+                        .unwrap_or_default(),
+                    conn_info
+                );
+            } else {
+                println!(
+                    "Got a request from '{}'",
+                    request
+                        .remote_addr()
+                        .map(|c| c.to_string())
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        let messages = self
+            .db
+            .get_messages()
+            .await
+            .map_err(|err| Status::new(tonic::Code::Unknown, err.to_string()))?;
+        let messages = messages
+            .into_iter()
+            .map(|d| d.message.unwrap_or_default())
+            .collect();
+        let reply = ListMessagesReply { messages };
+        Ok(Response::new(reply))
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+
     #[cfg(feature = "tls")]
     let identity = {
         let tls_dir = std::path::PathBuf::from("tls");
@@ -174,7 +230,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let addr = "[::0]:50051".parse().unwrap();
-    let greeter = MyGreeter::default();
+
+    let db_url = std::env::var("DATABASE_URL")?;
+    let db = db::Db::new(&db_url).await?;
+
+    let greeter = MyGreeter::new(db);
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(hello_world::FILE_DESCRIPTOR_SET)
