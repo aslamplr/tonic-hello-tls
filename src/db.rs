@@ -30,6 +30,7 @@ pub struct Message {
     pub updated: Option<i32>,
 }
 
+#[derive(Clone)]
 pub struct Db {
     conn_pool: Pool,
 }

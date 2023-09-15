@@ -27,8 +27,8 @@ service Greeter {
   // List all messages from db
   rpc ListMessages (ListMessagesRequest) returns (ListMessagesReply) {}
 
-  //TODO: Streaming greeting
-  //rpc ListMessagesStream (ListMessagesRequest) returns (stream HelloReply) {}
+  //Streaming greeting
+  rpc ListMessagesStream (ListMessagesRequest) returns (stream HelloReply) {}
 }
 
 // The request message containing the user's name.

@@ -1,6 +1,7 @@
 use std::{error::Error, io::ErrorKind, pin::Pin};
 
 use cfg_if::cfg_if;
+use messages::Broadcaster;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 #[cfg(feature = "tls")]
@@ -50,11 +51,12 @@ fn match_for_io_error(err_status: &Status) -> Option<&std::io::Error> {
 
 pub struct MyGreeter {
     db: db::Db,
+    broadcaster: messages::Broadcaster,
 }
 
 impl MyGreeter {
-    pub fn new(db: db::Db) -> Self {
-        Self { db }
+    pub fn new(db: db::Db, broadcaster: Broadcaster) -> Self {
+        Self { db, broadcaster }
     }
 }
 
@@ -92,7 +94,10 @@ impl Greeter for MyGreeter {
         self.db
             .insert_message(&reply.message)
             .await
-            .map_err(|err| Status::new(tonic::Code::Unknown, err.to_string()))?;
+            .map_err(|err| Status::new(tonic::Code::Internal, err.to_string()))?;
+        self.broadcaster
+            .broadcast(&reply.message)
+            .map_err(|err| Status::new(tonic::Code::Internal, err.to_string()))?;
         Ok(Response::new(reply))
     }
 
@@ -128,11 +133,16 @@ impl Greeter for MyGreeter {
         let mut in_stream = request.into_inner();
         let (tx, rx) = mpsc::channel(128);
 
+        let db = self.db.clone();
+        let broadcaster = self.broadcaster.clone();
+
         // this spawn here is required if you want to handle connection error.
         // If we just map `in_stream` and write it back as `out_stream` the `out_stream`
         // will be drooped when connection error occurs and error will never be propagated
         // to mapped version of `in_stream`.
         tokio::spawn(async move {
+            let db = db.clone();
+            let broadcaster = broadcaster.clone();
             while let Some(result) = in_stream.next().await {
                 match result {
                     Ok(v) => {
@@ -144,7 +154,13 @@ impl Greeter for MyGreeter {
                             message: format!("Hello {}!", v.name),
                         }))
                         .await
-                        .expect("working rx")
+                        .expect("working rx");
+                        if let Err(err) = db.insert_message(&v.name).await {
+                            eprintln!("failed to insert message: {}", err);
+                        }
+                        if let Err(err) = broadcaster.broadcast(&v.name) {
+                            eprint!("failed to broadcast message: {}", err);
+                        }
                     }
                     Err(err) => {
                         if let Some(io_err) = match_for_io_error(&err) {
@@ -206,13 +222,61 @@ impl Greeter for MyGreeter {
             .db
             .get_messages()
             .await
-            .map_err(|err| Status::new(tonic::Code::Unknown, err.to_string()))?;
+            .map_err(|err| Status::new(tonic::Code::Internal, err.to_string()))?;
         let messages = messages
             .into_iter()
             .map(|d| d.message.unwrap_or_default())
             .collect();
         let reply = ListMessagesReply { messages };
         Ok(Response::new(reply))
+    }
+
+    type ListMessagesStreamStream = GreeterResponseStream<HelloReply>;
+
+    async fn list_messages_stream(
+        &self,
+        _request: Request<ListMessagesRequest>,
+    ) -> GreeterResult<Self::ListMessagesStreamStream> {
+        let mut broadcast_rx = self.broadcaster.subscribe();
+        let (tx, rx) = mpsc::channel(128);
+        tokio::spawn(async move {
+            while let Ok(msg) = broadcast_rx.recv().await {
+                let msg = Ok(HelloReply { message: msg });
+                match tx.send(msg).await {
+                    Ok(_) => (),
+                    Err(_) => break,
+                }
+            }
+        });
+        let out_stream = ReceiverStream::new(rx);
+        Ok(Response::new(
+            Box::pin(out_stream) as Self::ListMessagesStreamStream
+        ))
+    }
+}
+
+mod messages {
+    type BroadcastError = tokio::sync::broadcast::error::SendError<String>;
+
+    #[derive(Clone)]
+    pub struct Broadcaster {
+        tx: tokio::sync::broadcast::Sender<String>,
+    }
+
+    impl Broadcaster {
+        pub fn new() -> Self {
+            let (tx, _rx) = tokio::sync::broadcast::channel(16);
+            Self { tx }
+        }
+
+        pub fn broadcast<T: Into<String>>(&self, msg: T) -> Result<(), BroadcastError> {
+            self.tx.send(msg.into())?;
+            Ok(())
+        }
+
+        pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<String> {
+            self.tx.subscribe()
+        }
     }
 }
 
@@ -234,7 +298,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_url = std::env::var("DATABASE_URL")?;
     let db = db::Db::new(&db_url).await?;
 
-    let greeter = MyGreeter::new(db);
+    let broadcaster = messages::Broadcaster::new();
+
+    let greeter = MyGreeter::new(db, broadcaster);
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(hello_world::FILE_DESCRIPTOR_SET)
